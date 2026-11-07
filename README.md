@@ -1,12 +1,12 @@
 # Quake Radar
 
-![.NET 8](https://img.shields.io/badge/.NET-8.0-512BD4)
+![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB)
 ![MongoDB 7](https://img.shields.io/badge/MongoDB-7-47A248)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
-Mapa de terremotos quase em tempo real. Um serviço em C# consulta o feed público do USGS a cada minuto, guarda os eventos no MongoDB e os exibe numa página com mapa. É possível buscar terremotos num raio de X km de qualquer ponto, ver estatísticas e receber um alerta ao vivo no navegador (e opcionalmente no Discord ou Slack) quando entra um evento acima de uma magnitude escolhida.
+Mapa de terremotos quase em tempo real. Um serviço em Python consulta o feed público do USGS a cada minuto, guarda os eventos no MongoDB e os exibe numa página com mapa. É possível buscar terremotos num raio de X km de qualquer ponto, ver estatísticas e receber um alerta ao vivo no navegador (e opcionalmente no Discord ou Slack) quando entra um evento acima de uma magnitude escolhida.
 
-Projeto de estudo de MongoDB com C#. Os dados são do [USGS Earthquake Hazards Program](https://earthquake.usgs.gov/earthquakes/feed/), públicos e sem chave de API.
+Projeto de estudo de MongoDB com Python. Os dados são do [USGS Earthquake Hazards Program](https://earthquake.usgs.gov/earthquakes/feed/), públicos e sem chave de API.
 
 ## Funcionalidades
 
@@ -21,7 +21,7 @@ Projeto de estudo de MongoDB com C#. Os dados são do [USGS Earthquake Hazards P
 
 ## Como rodar
 
-Pré-requisito: Docker. Para desenvolvimento local também é preciso o .NET 8 SDK.
+Pré-requisito: Docker. Para desenvolvimento local também é preciso o Python 3.12.
 
 ### Um comando
 
@@ -41,33 +41,35 @@ cp .env.example .env
 
 ```bash
 docker compose up -d mongo
-dotnet run --project src/QuakeRadar --urls http://localhost:5000
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+uvicorn quakeradar.main:app --app-dir src --port 5000
 ```
 
 Rodar os testes:
 
 ```bash
-dotnet test
+pytest
 ```
 
 ## Configuração
 
-As opções ficam em `src/QuakeRadar/appsettings.json` e podem ser sobrescritas por variáveis de ambiente, usando `__` no lugar de `:`.
+As opções ficam em `src/quakeradar/config.py` (pydantic-settings) e podem ser sobrescritas por variáveis de ambiente ou pelo `.env`, usando `__` para separar o grupo do campo.
 
 | Opção | Variável de ambiente | Padrão | Descrição |
 |---|---|---|---|
-| `Mongo:ConnectionString` | `Mongo__ConnectionString` | `mongodb://localhost:27017/?directConnection=true` | Conexão com o MongoDB |
-| `Mongo:Database` | `Mongo__Database` | `quakeradar` | Nome do banco |
-| `Mongo:RetentionDays` | `Mongo__RetentionDays` | `30` | Dias até o TTL apagar um evento |
-| `Collector:BaseUrl` | `Collector__BaseUrl` | URL dos feeds do USGS | Base dos feeds GeoJSON |
-| `Collector:BackfillFeed` | `Collector__BackfillFeed` | `all_month` | Feed carregado na partida |
-| `Collector:LiveFeed` | `Collector__LiveFeed` | `all_hour` | Feed consultado a cada ciclo |
-| `Collector:IntervalSeconds` | `Collector__IntervalSeconds` | `60` | Intervalo entre consultas |
-| `Alert:MinMagnitude` | `Alert__MinMagnitude` | `5.0` | Magnitude mínima para gravar alerta e acionar notificadores |
-| `Alert:MaxEventAgeHours` | `Alert__MaxEventAgeHours` | `6` | Eventos mais velhos que isso são ignorados pelo alerta |
-| `Alert:WebhookUrl` | `Alert__WebhookUrl` | vazio | URL de webhook do Discord ou Slack |
+| `mongo.connection_string` | `MONGO__CONNECTION_STRING` | `mongodb://localhost:27017/?directConnection=true` | Conexão com o MongoDB |
+| `mongo.database` | `MONGO__DATABASE` | `quakeradar` | Nome do banco |
+| `mongo.retention_days` | `MONGO__RETENTION_DAYS` | `30` | Dias até o TTL apagar um evento |
+| `collector.base_url` | `COLLECTOR__BASE_URL` | URL dos feeds do USGS | Base dos feeds GeoJSON |
+| `collector.backfill_feed` | `COLLECTOR__BACKFILL_FEED` | `all_month` | Feed carregado na partida |
+| `collector.live_feed` | `COLLECTOR__LIVE_FEED` | `all_hour` | Feed consultado a cada ciclo |
+| `collector.interval_seconds` | `COLLECTOR__INTERVAL_SECONDS` | `60` | Intervalo entre consultas |
+| `alert.min_magnitude` | `ALERT__MIN_MAGNITUDE` | `5.0` | Magnitude mínima para gravar alerta e acionar notificadores |
+| `alert.max_event_age_hours` | `ALERT__MAX_EVENT_AGE_HOURS` | `6` | Eventos mais velhos que isso são ignorados pelo alerta |
+| `alert.webhook_url` | `ALERT__WEBHOOK_URL` | vazio | URL de webhook do Discord ou Slack |
 
-O alerta ao vivo no navegador tem limite próprio, escolhido na página. O limite do servidor (`Alert:MinMagnitude`) controla só o que é gravado e enviado ao webhook.
+O alerta ao vivo no navegador tem limite próprio, escolhido na página. O limite do servidor (`alert.min_magnitude`) controla só o que é gravado e enviado ao webhook.
 
 ## Arquitetura
 
@@ -77,7 +79,7 @@ O alerta ao vivo no navegador tem limite próprio, escolhido na página. O limit
 flowchart LR
     USGS[(Feed USGS GeoJSON)]
 
-    subgraph App[Aplicação ASP.NET Core]
+    subgraph App[Aplicação FastAPI]
         Collector[UsgsCollector]
         FeedClient[UsgsFeedClient e UsgsParser]
         Repos[Repositórios]
@@ -121,11 +123,11 @@ sequenceDiagram
 
     C->>M: upsert em lote (ReplaceOne com upsert)
     M-->>W: change stream, operação insert
-    W->>D: DispatchAsync(quake)
+    W->>D: dispatch(quake)
     D->>D: descarta se mais velho que MaxEventAgeHours
-    D->>B: Publish(quake)
+    D->>B: publish(quake)
     B-->>U: data com o evento, se mag >= limite do usuário
-    D->>N: NotifyAsync, se mag >= Alert:MinMagnitude
+    D->>N: notify, se mag >= Alert:MinMagnitude
     N->>M: grava em alerts
     N-->>N: log e webhook opcional
 ```
@@ -149,30 +151,29 @@ flowchart TD
     Alerts --> Domain
 ```
 
-O domínio não depende de nada do projeto. As camadas de cima conversam com interfaces, e as implementações concretas são ligadas ao `ServiceCollectionExtensions`.
+O domínio não depende de nada do projeto. As camadas de cima conversam com interfaces, e as implementações concretas são ligadas em `composition.py`.
 
 ### Estrutura de pastas
 
 ```
-QuakeRadar/
-├── .github/workflows/ci.yml          # build, testes e build da imagem Docker
-├── src/QuakeRadar/
-│   ├── Domain/                       # Quake e Alert (documentos do MongoDB)
-│   ├── Configuration/                # classes de opções (Mongo, Collector, Alert)
-│   ├── Feed/                         # IFeedClient, UsgsFeedClient e UsgsParser
-│   ├── Persistence/                  # repositórios, modelos de consulta e índices
-│   ├── Realtime/                     # QuakeBroadcaster e assinaturas SSE
-│   ├── Alerts/                       # AlertDispatcher e notificadores
-│   ├── Workers/                      # UsgsCollector e AlertWatcher (BackgroundService)
-│   ├── Api/                          # endpoints, contratos e registro das rotas
-│   ├── Composition/                  # raiz de composição da injeção de dependência
-│   ├── wwwroot/index.html            # página com mapa
-│   ├── appsettings.json
-│   └── Program.cs
-├── tests/QuakeRadar.Tests/           # testes xUnit
+quake-radar/
+├── .github/workflows/ci.yml          # lint, testes e build da imagem Docker
+├── src/quakeradar/
+│   ├── domain/                       # Quake e Alert (documentos do MongoDB)
+│   ├── feed/                         # FeedClient, UsgsFeedClient e UsgsParser
+│   ├── persistence/                  # repositórios, consultas e índices
+│   ├── realtime/                     # QuakeBroadcaster e assinaturas SSE
+│   ├── alerts/                       # AlertDispatcher e notificadores
+│   ├── workers/                      # UsgsCollector e AlertWatcher (tarefas asyncio)
+│   ├── api/                          # rotas FastAPI e contratos
+│   ├── static/index.html             # página com mapa
+│   ├── config.py                     # configurações (pydantic-settings)
+│   ├── composition.py                # raiz de composição das dependências
+│   └── main.py                       # app FastAPI e ciclo de vida dos workers
+├── tests/                            # testes pytest
 ├── Dockerfile
 ├── docker-compose.yml                # MongoDB em replica set e a aplicação
-├── QuakeRadar.sln
+├── pyproject.toml
 └── README.md
 ```
 
@@ -180,8 +181,8 @@ QuakeRadar/
 
 | Componente | Responsabilidade |
 |---|---|
-| `UsgsCollector` | Serviço em segundo plano. Carrega o histórico na partida e consulta o feed em intervalo fixo. |
-| `UsgsFeedClient` | Baixa o feed pelo `HttpClient` nomeado `usgs` e entrega documentos de domínio. |
+| `UsgsCollector` | Tarefa asyncio em segundo plano. Carrega o histórico na partida e consulta o feed em intervalo fixo. |
+| `UsgsFeedClient` | Baixa o feed pelo `httpx.AsyncClient` e entrega documentos de domínio. |
 | `UsgsParser` | Converte o GeoJSON do USGS em `Quake`. Função pura, sem rede e sem banco. |
 | `MongoQuakeRepository` | Upsert em lote, busca por raio e change stream de inserções. |
 | `MongoQuakeStatsRepository` | Agregações por dia, faixa e região, e o `explain()`. |
@@ -190,7 +191,7 @@ QuakeRadar/
 | `AlertWatcher` | Escuta o change stream e repassa cada evento novo ao dispatcher. Reabre o stream se ele cair. |
 | `AlertDispatcher` | Filtra por idade, publica para os navegadores e aciona os notificadores acima do limite. |
 | `QuakeBroadcaster` | Publicador em memória, com um canal por navegador conectado. |
-| `IAlertNotifier` | Contrato de notificação, com três implementações: gravar, registrar no log e webhook. |
+| `AlertNotifier` | Contrato de notificação, com três implementações: gravar, registrar no log e webhook. |
 
 ## MongoDB em detalhe
 
@@ -201,12 +202,12 @@ Coleção `quakes`:
 ```json
 {
   "_id": "us7000abcd",
-  "Mag": 5.1,
-  "Place": "45 km SE of Hitachi, Japan",
-  "Time": "2026-11-01T03:12:45Z",
-  "DepthKm": 38.2,
-  "Url": "https://earthquake.usgs.gov/earthquakes/eventpage/us7000abcd",
-  "Location": { "type": "Point", "coordinates": [140.9, 36.3] }
+  "mag": 5.1,
+  "place": "45 km SE of Hitachi, Japan",
+  "time": "2026-11-01T03:12:45Z",
+  "depth_km": 38.2,
+  "url": "https://earthquake.usgs.gov/earthquakes/eventpage/us7000abcd",
+  "location": { "type": "Point", "coordinates": [140.9, 36.3] }
 }
 ```
 
@@ -217,11 +218,11 @@ Coleção `alerts`:
 ```json
 {
   "_id": { "$oid": "..." },
-  "QuakeId": "us7000abcd",
-  "Mag": 5.1,
-  "Place": "45 km SE of Hitachi, Japan",
-  "QuakeTime": "2026-11-01T03:12:45Z",
-  "CreatedAt": "2026-11-01T03:13:02Z"
+  "quake_id": "us7000abcd",
+  "mag": 5.1,
+  "place": "45 km SE of Hitachi, Japan",
+  "quake_time": "2026-11-01T03:12:45Z",
+  "created_at": "2026-11-01T03:13:02Z"
 }
 ```
 
@@ -229,19 +230,19 @@ Coleção `alerts`:
 
 | Coleção | Índice | Finalidade |
 |---|---|---|
-| `quakes` | `2dsphere` em `Location` | Busca por raio com `$nearSphere` e `$geoWithin` |
-| `quakes` | Ascendente em `Time` com TTL de 30 dias | O MongoDB apaga eventos antigos sozinho, e o índice também serve para filtrar por período |
+| `quakes` | `2dsphere` em `location` | Busca por raio com `$nearSphere` e `$geoWithin` |
+| `quakes` | Ascendente em `time` com TTL de 30 dias | O MongoDB apaga eventos antigos sozinho, e o índice também serve para filtrar por período |
 
 ### Recursos do MongoDB usados
 
 | Recurso | Onde | O que resolve |
 |---|---|---|
-| Índice `2dsphere` | `MongoQuakeRepository.FindNearAsync` | Resolve "terremotos num raio de X km" no banco, já ordenado do mais perto para o mais longe |
-| Upsert em lote | `MongoQuakeRepository.UpsertManyAsync` | Coleta idempotente, que também aplica revisões de magnitude feitas pelo USGS |
+| Índice `2dsphere` | `MongoQuakeRepository.find_near` | Resolve "terremotos num raio de X km" no banco, já ordenado do mais perto para o mais longe |
+| Upsert em lote | `MongoQuakeRepository.upsert_many` | Coleta idempotente, que também aplica revisões de magnitude feitas pelo USGS |
 | Aggregation pipeline | `MongoQuakeStatsRepository` | Estatísticas calculadas no servidor, sem trazer os dados para a aplicação |
-| Change stream | `MongoQuakeRepository.WatchInsertsAsync` | Reage ao evento no instante em que ele entra, sem consultar o banco repetidamente |
+| Change stream | `MongoQuakeRepository.watch_inserts` | Reage ao evento no instante em que ele entra, sem consultar o banco repetidamente |
 | Índice TTL | `QuakeIndexInitializer` | Retenção de dados sem tarefa de limpeza |
-| `explain()` | `MongoQuakeStatsRepository.ExplainNearAsync` | Mostra quantos documentos o banco examinou com e sem índice |
+| `explain()` | `MongoQuakeStatsRepository.explain_near` | Mostra quantos documentos o banco examinou com e sem índice |
 
 ### Agregações
 
@@ -249,10 +250,10 @@ Terremotos por dia, com contagem, média e maior magnitude:
 
 ```json
 [
-  { "$match": { "Mag": { "$ne": null }, "Time": { "$gte": "<agora - N dias>" } } },
+  { "$match": { "mag": { "$ne": null }, "time": { "$gte": "<agora - N dias>" } } },
   { "$group": {
-      "_id": { "$dateToString": { "format": "%Y-%m-%d", "date": "$Time" } },
-      "total": { "$sum": 1 }, "avg": { "$avg": "$Mag" }, "max": { "$max": "$Mag" } } },
+      "_id": { "$dateToString": { "format": "%Y-%m-%d", "date": "$time" } },
+      "total": { "$sum": 1 }, "avg": { "$avg": "$mag" }, "max": { "$max": "$mag" } } },
   { "$sort": { "_id": 1 } }
 ]
 ```
@@ -261,19 +262,19 @@ Faixas de magnitude com `$bucket`, em que eventos de qualquer valor fora das fro
 
 ```json
 { "$bucket": {
-    "groupBy": "$Mag",
+    "groupBy": "$mag",
     "boundaries": [-10, 2, 4, 5, 6, 10],
     "default": "other",
-    "output": { "total": { "$sum": 1 }, "max": { "$max": "$Mag" } } } }
+    "output": { "total": { "$sum": 1 }, "max": { "$max": "$mag" } } } }
 ```
 
 Ranking de regiões. O campo `Place` tem o formato `"45 km SE of Hitachi, Japan"`, então a região é o texto depois da última vírgula. Locais sem vírgula, como `"Mid-Atlantic Ridge"`, funcionam do mesmo jeito:
 
 ```json
 [
-  { "$addFields": { "Region": { "$trim": { "input":
-      { "$arrayElemAt": [ { "$split": ["$Place", ","] }, -1 ] } } } } },
-  { "$group": { "_id": "$Region", "total": { "$sum": 1 }, "max": { "$max": "$Mag" } } },
+  { "$addFields": { "region": { "$trim": { "input":
+      { "$arrayElemAt": [ { "$split": ["$place", ","] }, -1 ] } } } } },
+  { "$group": { "_id": "$region", "total": { "$sum": 1 }, "max": { "$max": "$mag" } } },
   { "$sort": { "total": -1 } },
   { "$limit": 15 }
 ]
@@ -345,7 +346,7 @@ curl -N "http://localhost:5000/events/stream?minMag=2.5"
 
 ## Front-end
 
-Uma única página em `wwwroot/index.html`, sem build e sem framework, com [Leaflet](https://leafletjs.com) e mapa do OpenStreetMap.
+Uma única página em `static/index.html`, sem build e sem framework, com [Leaflet](https://leafletjs.com) e mapa do OpenStreetMap.
 
 - Painel esquerdo: região, raio, dias e magnitude mínima, os três números-resumo, a lista dos eventos mais fortes, as barras de terremotos por dia e os alertas.
 - Mapa: um círculo tracejado marca o raio da busca, e cada evento é um círculo cujo tamanho e cor dependem da magnitude.
@@ -375,7 +376,7 @@ Uma única página em `wwwroot/index.html`, sem build e sem framework, com [Leaf
 
 ## Ideias futuras
 
-- Notificador de e-mail ou Telegram, implementando `IAlertNotifier`.
+- Notificador de e-mail ou Telegram, implementando `AlertNotifier`.
 - Alerta por região, e não só por magnitude, usando um polígono ou um raio guardado por usuário.
 - Publicador de eventos com Redis para rodar várias instâncias.
 - Mapa de calor com a densidade de terremotos.
